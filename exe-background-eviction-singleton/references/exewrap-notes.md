@@ -1,9 +1,19 @@
-# ExeWrap Notes
+# ExeWrap Runtime Notes
 
-Use `ExeWrap-windowed.exe` for the stamped background launcher. The windowed subsystem avoids a console window; its child has no inherited standard streams.
+Use a checksum-verified current ExeWrap release. Stamp `ExeWrap-windowed.exe` and set `kill_children_on_exit` to `true`; this puts the PowerShell command and its worker tree in a Windows Job Object.
 
-Set `kill_children_on_exit` to `true`. ExeWrap creates a Windows Job Object and places its child in it, so killing the launcher terminates the child process tree.
+The inline command recovers its own path with:
 
-Use `@{exe_path}` to pass the full stamped executable path to the supervisor via an environment value. `@{exe_dir}` follows the final executable location and keeps the bundle portable.
+```powershell
+$OwnerExePath = ConvertFrom-Json '"@{exe_path:json}"'
+```
 
-ExeWrap does not provide a cross-PID singleton API. The eviction helper owns that policy by querying Windows' `Win32_Process.ExecutablePath`; do not degrade this to command-line or filename matching.
+The extra quote layer is intentional. In an ExeWrap templated JSON string, the `json` transform provides escaped JSON-string content; `ConvertFrom-Json` needs the JSON quote delimiters supplied by the PowerShell source.
+
+Forward all launch arguments using:
+
+```powershell
+$ForwardedArgs = ConvertFrom-Json '@{args_as_json}'
+```
+
+`args_as_json` is designed for single-quoted PowerShell source. For batch workers, call `cmd.exe` through a native PowerShell argument array rather than `Start-Process -ArgumentList`, whose string joining can change quoting.

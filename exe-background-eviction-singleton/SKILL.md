@@ -1,68 +1,76 @@
 ---
 name: exe-background-eviction-singleton
-description: Wrap a Windows app as a portable, windowless ExeWrap background executable that evicts prior runs of the same stamped executable path and starts a fresh supervised run. Use when asked to create a background .exe, a best-effort singleton launcher, or an eviction-singleton wrapper for a Windows application; use only when forcefully stopping prior same-path runs is acceptable.
+description: Create Windows ExeWrap windowed background launchers that evict prior runs of the same canonical stamped-executable path. Use when asked to wrap a Windows worker, batch file, or service as a portable best-effort singleton background .exe with optional restart-on-failure and forwarded command-line arguments.
 ---
 
 # Exe Background Eviction Singleton
 
-Create a best-effort *eviction singleton*, not a strict singleton: a new launch finds and terminates older launcher processes whose `Win32_Process.ExecutablePath` is the same canonical full path as the stamped launcher, then starts the app.
+Build an *eviction singleton*: a new launch forcefully terminates old runs of the same canonical stamped-executable path, then starts the worker. This is deliberately not a strict singleton: concurrent launches may race, and no mutex, PID file, lockfile, service, or registry state is created.
 
-Use this only for Windows and only when the app owner accepts forceful termination. It deliberately has no mutex, PID file, lock, service registration, or cross-install identity. Concurrent launches can race; the desired outcome is that a newly started launch evicts older same-path launches.
+Use the inline pattern by default. The generated stamped executable carries the complete PowerShell eviction and restart implementation; the deployed bundle does not need an eviction or supervisor `.ps1` file.
 
-## Inputs To Establish
+## Establish Inputs
 
-Get or infer:
+Determine the worker's relative path, whether it is a batch file or executable, its default arguments, and its restart policy:
 
-- the target command and its required arguments;
-- the portable bundle layout and working directory;
-- whether the target needs a restart supervisor or is itself the long-running worker;
-- the launcher filename and final output path;
-- whether terminating the previous process tree is safe.
+- `on-failure` is the default for a background service: restart after a non-zero exit with a bounded delay.
+- `always` restarts even after exit code zero; use only when zero means an unexpected service stop.
+- `never` is for one-shot workers.
 
-Do not add application dependency installation, Startup-folder registration, scheduled tasks, ports, or process-name matching unless the user separately asks for them.
+Do not add Startup integration, dependency installation, port ownership, process-name matching, or a persistent lock unless the user separately asks.
 
-## Build The Launcher
+## Generate The Inline Config
 
-1. Obtain the current pinned ExeWrap release and verify its published checksum before using it.
-2. Copy [`scripts/evict-prior-launchers.ps1`](scripts/evict-prior-launchers.ps1) into the target bundle next to the launcher or its supervisor script.
-3. In the first lines of the supervisor, invoke it with the launcher's exact path injected through `SINGLETON_OWNER_EXE`:
+Use [`scripts/new-inline-eviction-config.ps1`](scripts/new-inline-eviction-config.ps1) to produce the ExeWrap config. It validates a relative worker path, embeds the eviction implementation, forwards launcher arguments, writes a launcher log, and selects batch/executable invocation safely.
 
-   ```powershell
-   & "$PSScriptRoot\evict-prior-launchers.ps1" -OwnerExePath $env:SINGLETON_OWNER_EXE
-   ```
-
-4. Stamp `ExeWrap-windowed.exe` with `kill_children_on_exit: true`. Set `SINGLETON_OWNER_EXE` to `@{exe_path}` and use only executable-relative paths.
-5. Validate the stamped launcher from a path containing spaces. Launch it twice and confirm that the second run terminates the first process tree and leaves one active run.
-
-Use [`assets/background-launcher.config.json.template`](assets/background-launcher.config.json.template) as the config shape. Replace the marked supervisor path and command; preserve the owner-path environment value and Job Object setting.
-
-## Inline Stamp Alternative
-
-When the eviction implementation must have no adjacent `.ps1` file, put its PowerShell source directly in the final `powershell.exe -Command` config item. Keep only the target app files next to the stamped launcher.
-
-Recover the template path as a JSON string, not as a bare PowerShell path:
+Example:
 
 ```powershell
-$OwnerExePath = ConvertFrom-Json '"@{exe_path:json}"'
+& .\new-inline-eviction-config.ps1 `
+  -OutputConfig .\worker.config.json `
+  -WorkerRelativePath worker\service.exe `
+  -WorkerKind executable `
+  -RestartPolicy on-failure `
+  -RestartDelaySeconds 5
 ```
 
-The outer JSON quotes are required: in a templated JSON command string, `@{exe_path:json}` supplies the escaped JSON-string content, not the final quote delimiters. Put the eviction functions and execution logic after this assignment.
-
-When the target is a batch file, start it through `cmd.exe` and wait for it; do not invoke the `.bat` directly from the inline command. For example:
+Stamp the result with a checksum-verified current ExeWrap release:
 
 ```powershell
-Start-Process -FilePath $env:ComSpec -ArgumentList @('/d', '/c', '@{exe_dir}\worker.bat') -NoNewWindow -Wait
+& ExeWrap-stamper.exe `
+  --launcher ExeWrap-windowed.exe `
+  --config .\worker.config.json `
+  --subsystem windowed `
+  .\worker-background.exe
 ```
 
+## Inline Runtime Contract
 
-## Ownership Rule
+The generated command uses all of the following:
 
-Match candidates by `Win32_Process.ExecutablePath`, normalized to a full path and compared case-insensitively. Do not match by filename, PowerShell command line, port, module name, or a hand-written process list.
+- `kill_children_on_exit: true`, so ExeWrap's Windows Job Object owns the worker tree.
+- `Win32_Process.ExecutablePath`, normalized and compared case-insensitively, to select eviction targets. Never match filename or command-line text.
+- `$OwnerExePath = ConvertFrom-Json '"@{exe_path:json}"'` to recover the full current stamped-executable path.
+- `$ForwardedArgs = ConvertFrom-Json '@{args_as_json}'` to recover every user-supplied launcher argument.
 
-`@{exe_path}` identifies the currently stamped ExeWrap executable. ExeWrap does not enumerate other PIDs itself; it injects this path into its child environment. The PowerShell helper then reads the full executable path recorded by Windows for each candidate PID. This remains safe when two unrelated launchers happen to share a filename.
+For a batch worker, the generated code builds a native command argument array and invokes `cmd.exe` directly:
 
-Avoid treating this as cryptographic proof of ownership: a process using the exact same launcher path is intentionally in scope, and a concurrent launch can race. That is the accepted trade-off for this lightweight pattern.
+```powershell
+$childArgs = @('/d', '/c', $WorkerPath) + @($ForwardedArgs)
+& $env:ComSpec @childArgs
+```
 
-## Deliverables
+Do not use `Start-Process -ArgumentList` for forwarded user arguments unless its quoting behaviour has been specifically tested for the target. The native invocation above preserves PowerShell's argument-array handling and waits for the batch process.
 
-Produce the stamped executable, its config/source files, the supervisor or target script, a stop instruction, and a short note naming the exact eviction scope: "same canonical stamped-executable path."
+## Validate Before Hand-off
+
+1. Parse the generated JSON and stamp a console launcher first when diagnosing errors.
+2. Stamp the windowed launcher.
+3. Run it from a path containing spaces.
+4. Launch it twice. Confirm that only the second launcher PID has the stamped executable's `ExecutablePath` and that the first worker tree stopped.
+5. Run it with arguments containing spaces and shell metacharacters; verify the worker receives them exactly.
+6. Make the worker exit non-zero once; confirm the configured restart delay and `launcher.log` entry. Confirm a zero exit follows the selected policy.
+
+## Boundaries
+
+The ownership scope is exactly "same canonical stamped-executable path." It avoids clashes with another identically named `.exe` elsewhere, but it intentionally evicts any process actually launched from that same path. It is designed for normal same-user operation; process metadata can be unavailable across users or elevation boundaries.
