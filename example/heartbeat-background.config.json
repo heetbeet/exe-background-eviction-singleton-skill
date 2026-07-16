@@ -1,0 +1,15 @@
+{
+  "kill_children_on_exit": true,
+  "cwd": "@{exe_dir}",
+  "env": {
+    "SINGLETON_OWNER_EXE": "@{exe_path}"
+  },
+  "command": [
+    "powershell.exe",
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    "@{exe_dir}\\background-supervisor.ps1"
+  ]
+}
