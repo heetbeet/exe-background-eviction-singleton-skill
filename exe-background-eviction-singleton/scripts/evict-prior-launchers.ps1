@@ -49,4 +49,3 @@ foreach ($priorLauncher in $priorLaunchers | Sort-Object ProcessId -Descending) 
     Write-Host "Evicting prior launcher PID $($priorLauncher.ProcessId): $ownerPath"
     Stop-ProcessTree -ProcessId $priorLauncher.ProcessId
 }
-
