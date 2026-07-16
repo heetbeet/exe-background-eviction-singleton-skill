@@ -36,6 +36,25 @@ Do not add application dependency installation, Startup-folder registration, sch
 
 Use [`assets/background-launcher.config.json.template`](assets/background-launcher.config.json.template) as the config shape. Replace the marked supervisor path and command; preserve the owner-path environment value and Job Object setting.
 
+## Inline Stamp Alternative
+
+When the eviction implementation must have no adjacent `.ps1` file, put its PowerShell source directly in the final `powershell.exe -Command` config item. Keep only the target app files next to the stamped launcher.
+
+Recover the template path as a JSON string, not as a bare PowerShell path:
+
+```powershell
+$OwnerExePath = ConvertFrom-Json '"@{exe_path:json}"'
+```
+
+The outer JSON quotes are required: in a templated JSON command string, `@{exe_path:json}` supplies the escaped JSON-string content, not the final quote delimiters. Put the eviction functions and execution logic after this assignment.
+
+When the target is a batch file, start it through `cmd.exe` and wait for it; do not invoke the `.bat` directly from the inline command. For example:
+
+```powershell
+Start-Process -FilePath $env:ComSpec -ArgumentList @('/d', '/c', '@{exe_dir}\worker.bat') -NoNewWindow -Wait
+```
+
+
 ## Ownership Rule
 
 Match candidates by `Win32_Process.ExecutablePath`, normalized to a full path and compared case-insensitively. Do not match by filename, PowerShell command line, port, module name, or a hand-written process list.

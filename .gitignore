@@ -3,3 +3,5 @@ logs/
 *.log
 example/last-seen.txt
 example/heartbeat-background.exe
+example/heartbeat-inline.exe
+example/heartbeat-inline-console.exe
