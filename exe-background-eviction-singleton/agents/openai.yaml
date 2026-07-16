@@ -1,0 +1,4 @@
+interface:
+  display_name: "Exe Background Eviction Singleton"
+  short_description: "Build path-scoped singleton background launchers"
+  default_prompt: "Use $exe-background-eviction-singleton to wrap this app as a path-scoped background executable."

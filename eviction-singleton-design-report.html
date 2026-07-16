@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ExeWrap Eviction Singleton Design</title>
+  <style>
+    :root { font-family: Inter, ui-sans-serif, system-ui, sans-serif; line-height: 1.55; color-scheme: light dark; }
+    body { margin: 0; background: Canvas; color: CanvasText; }
+    main { max-width: 860px; margin: 0 auto; padding: 48px 24px 64px; }
+    h1, h2 { line-height: 1.2; }
+    .answer { border-left: 5px solid #1976d2; padding: 14px 18px; background: color-mix(in srgb, #1976d2 10%, transparent); }
+    code { font-family: ui-monospace, Consolas, monospace; }
+    li { margin: .45rem 0; }
+    a { color: #1674d1; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>ExeWrap Eviction Singleton Design</h1>
+    <p>This is a deliberately lightweight, best-effort pattern. It is not a strict singleton and does not use a mutex, PID file, secondary lock, or a general service manager.</p>
+
+    <h2>Can ExeWrap identify itself by full path?</h2>
+    <div class="answer">
+      <p><strong>Yes, for this purpose.</strong> ExeWrap exposes its exact current path as <code>@{exe_path}</code>. Stamp that into an environment variable such as <code>SINGLETON_OWNER_EXE</code>, then have the launched PowerShell supervisor query <code>Win32_Process.ExecutablePath</code> for running PIDs and compare canonical full paths case-insensitively.</p>
+      <p>Use <code>ExecutablePath</code>, not the command line. The command line may contain a bare filename, altered quoting, or no launcher path at all. Windows records the executable image path separately. This distinguishes two <code>start-background.exe</code> files in different directories.</p>
+    </div>
+
+    <h2>Chosen model: eviction singleton</h2>
+    <ol>
+      <li>A stamped, windowed ExeWrap executable starts a supervisor.</li>
+      <li>The stamp injects its own full path using <code>@{exe_path}</code>.</li>
+      <li>The supervisor finds prior processes whose <code>ExecutablePath</code> equals that exact path.</li>
+      <li>It forcefully terminates each matching process tree.</li>
+      <li>It starts the new worker, with ExeWrap's Job Object retaining child-tree cleanup.</li>
+    </ol>
+    <p>This accepts a startup race: two nearly simultaneous starts may evict each other briefly. That is acceptable under the stated goal—new launches evict old same-path launches—without adding persistent coordination.</p>
+
+    <h2>What this deliberately excludes</h2>
+    <ul>
+      <li>No <code>instance_id</code> or stamped unique identifier.</li>
+      <li>No mutex, PID/state file, lockfile, or registry state.</li>
+      <li>No graceful shutdown protocol; forceful tree termination is the chosen policy.</li>
+      <li>No matching by executable filename, port, command-line fragments, or app-specific worker names.</li>
+      <li>No Startup registration, scheduled tasks, dependency installation, or application supervision policy.</li>
+      <li>No automatic “latest release” fetching. The user of the skill chooses a current pinned ExeWrap release and verifies its published checksum.</li>
+    </ul>
+
+    <h2>Boundaries</h2>
+    <p>The ownership boundary is “same canonical stamped-executable path,” not a stronger security identity. It safely avoids collisions with identically named executables elsewhere, but any process actually launched from that same executable path is intentionally eligible for eviction. Reading <code>ExecutablePath</code> can also be restricted for processes owned by another user or elevated context; this pattern is designed for the normal same-user background-launcher case.</p>
+
+    <h2>Result</h2>
+    <p>The accompanying skill is named <code>exe-background-eviction-singleton</code>. It provides an ExeWrap config template and a PowerShell eviction helper that implements this exact scope.</p>
+
+    <p>References: <a href="https://github.com/AutoActuary/ExeWrap/blob/master/README.md">ExeWrap README</a> and <a href="https://github.com/AutoActuary/ExeWrap/blob/master/docs/implementation-notes.md">implementation notes</a>.</p>
+  </main>
+</body>
+</html>
