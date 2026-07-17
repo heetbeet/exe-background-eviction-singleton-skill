@@ -2,7 +2,7 @@
 
 A Codex skill for creating portable Windows background executables with [ExeWrap](https://github.com/AutoActuary/ExeWrap).
 
-The default deployment is a windowed stamped executable containing its full PowerShell runtime: it evicts prior runs of the same canonical launcher path, forwards command-line arguments, writes `launcher.log`, and restarts a worker according to a chosen policy.
+The default deployment is a windowed stamped executable containing its full PowerShell runtime: it evicts prior runs of the same canonical launcher path, combines fixed and forwarded command-line arguments, optionally writes `launcher.log`, and restarts a worker according to a chosen policy.
 
 It is an eviction singleton, not a strict singleton. It intentionally avoids mutexes, PID files, lockfiles, services, and registry state.
 
@@ -18,7 +18,10 @@ The skill's generator creates a config with these defaults:
 - forwarded launcher arguments;
 - `on-failure` restart after a five-second delay.
 
-Choose `never` for a one-shot worker or `always` only when every worker exit should restart it.
+Use `-DisableLauncherLog` for a silent wrapper, and
+`-AllowParentWorkerPath` for an intentional sibling worker such as a repository
+venv. Choose `never` for a one-shot worker or `always` only when every worker
+exit should restart it.
 
 ## Scope
 

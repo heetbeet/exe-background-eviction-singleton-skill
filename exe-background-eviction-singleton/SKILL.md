@@ -21,7 +21,7 @@ Do not add Startup integration, dependency installation, port ownership, process
 
 ## Generate The Inline Config
 
-Use [`scripts/new-inline-eviction-config.ps1`](scripts/new-inline-eviction-config.ps1) to produce the ExeWrap config. It validates a relative worker path, embeds the eviction implementation, forwards launcher arguments, writes a launcher log, and selects batch/executable invocation safely.
+Use [`scripts/new-inline-eviction-config.ps1`](scripts/new-inline-eviction-config.ps1) to produce the ExeWrap config. It validates a relative worker path, embeds the eviction implementation, combines configured default arguments with forwarded launcher arguments, optionally writes a launcher log, and selects batch/executable invocation safely.
 
 Example:
 
@@ -29,10 +29,13 @@ Example:
 & .\new-inline-eviction-config.ps1 `
   -OutputConfig .\worker.config.json `
   -WorkerRelativePath worker\service.exe `
+  -WorkerArguments @('--config', 'service.json') `
   -WorkerKind executable `
   -RestartPolicy on-failure `
   -RestartDelaySeconds 5
 ```
+
+Use `-DisableLauncherLog` for a silent wrapper that creates no `launcher.log`. Use `-AllowParentWorkerPath` only when the worker intentionally lives outside the executable directory, such as `..\venv\Scripts\python.exe`. Parent traversal remains rejected by default.
 
 Stamp the result with a checksum-verified current ExeWrap release:
 
@@ -52,6 +55,7 @@ The generated command uses all of the following:
 - `Win32_Process.ExecutablePath`, normalized and compared case-insensitively, to select eviction targets. Never match filename or command-line text.
 - `$OwnerExePath = ConvertFrom-Json '"@{exe_path:json}"'` to recover the full current stamped-executable path.
 - `$ForwardedArgs = ConvertFrom-Json '@{args_as_json}'` to recover every user-supplied launcher argument.
+- Configured `WorkerArguments` precede forwarded launcher arguments, so a Python interpreter can have a fixed entry script while still accepting CLI options.
 
 For a batch worker, the generated code builds a native command argument array and invokes `cmd.exe` directly:
 
@@ -70,6 +74,20 @@ Do not use `Start-Process -ArgumentList` for forwarded user arguments unless its
 4. Launch it twice. Confirm that only the second launcher PID has the stamped executable's `ExecutablePath` and that the first worker tree stopped.
 5. Run it with arguments containing spaces and shell metacharacters; verify the worker receives them exactly.
 6. Make the worker exit non-zero once; confirm the configured restart delay and `launcher.log` entry. Confirm a zero exit follows the selected policy.
+
+When launcher logging is disabled, instead confirm that no `launcher.log` is created and inspect the worker's own log or observable output. The config JSON is a stamping artifact, not a runtime dependency; do not deploy it when a clean bundle is wanted.
+
+## Starting Through OpenSSH
+
+A process started with `Start-Process` inside a short-lived OpenSSH command may be terminated when that SSH command ends. For a background launcher that must survive the session, create it with WMI/CIM and then verify it from a fresh SSH connection:
+
+```powershell
+$commandLine = '"' + $launcherPath + '"'
+$result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $commandLine }
+if ($result.ReturnValue -ne 0) { throw "Win32_Process.Create failed: $($result.ReturnValue)" }
+```
+
+Do not use `Pid` as a PowerShell parameter or loop variable name: variable names are case-insensitive and the automatic `$PID` variable is read-only. Prefer `ProcessId` or `ProcessIdentifier`.
 
 ## Boundaries
 
