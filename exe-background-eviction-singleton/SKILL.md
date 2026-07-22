@@ -93,6 +93,8 @@ if ($result.ReturnValue -ne 0) { throw "Win32_Process.Create failed: $($result.R
 
 Do not use `Pid` as a PowerShell parameter or loop variable name: variable names are case-insensitive and the automatic `$PID` variable is read-only. Prefer `ProcessId` or `ProcessIdentifier`.
 
+CIM creation from an OpenSSH service normally runs in Windows session 0. That is suitable for a headless launcher, but a failure toast from session 0 is not visible on the logged-in desktop. When visible notifications are part of the contract, hand the launch to the already logged-in user's interactive session instead. A tested remote pattern is to register a uniquely named transient Scheduled Task with an `Interactive` logon principal, start it, wait until the stamped executable appears in the same `SessionId` as `explorer.exe`, and immediately unregister the task. Verify afterward that the launcher survived task removal and that no transient task remains. Do not leave the task installed as Startup integration.
+
 ## Boundaries
 
 The ownership scope is exactly "same canonical stamped-executable path." It avoids clashes with another identically named `.exe` elsewhere, but it intentionally evicts any process actually launched from that same path. It is designed for normal same-user operation; process metadata can be unavailable across users or elevation boundaries.
