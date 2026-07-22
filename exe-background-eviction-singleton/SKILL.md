@@ -37,6 +37,8 @@ Example:
 
 Use `-DisableLauncherLog` for a silent wrapper that creates no `launcher.log`. Use `-AllowParentWorkerPath` only when the worker intentionally lives outside the executable directory, such as `..\venv\Scripts\python.exe`. Parent traversal remains rejected by default.
 
+Use `-FailureToastTitle 'Platform poller error'` when a long-running desktop worker should visibly report a non-zero exit. The embedded Windows Runtime notification does not depend on the worker or its environment, includes only the stamped executable name and exit code, and is best-effort: notification failure never changes supervision. Repeated errors are suppressed for five minutes by default; change this with `-FailureToastCooldownSeconds`. Set `-FailureToastAppId` when the notification should have a platform-specific sender name.
+
 Stamp the result with a checksum-verified current ExeWrap release:
 
 ```powershell
@@ -56,6 +58,7 @@ The generated command uses all of the following:
 - `$OwnerExePath = ConvertFrom-Json '"@{exe_path:json}"'` to recover the full current stamped-executable path.
 - `$ForwardedArgs = ConvertFrom-Json '@{args_as_json}'` to recover every user-supplied launcher argument.
 - Configured `WorkerArguments` precede forwarded launcher arguments, so a Python interpreter can have a fixed entry script while still accepting CLI options.
+- When failure toasts are enabled, a non-zero exit is reported before the restart/exit decision. Toasts contain no worker output, arguments, paths, or secrets, and an in-memory cooldown prevents a crash loop from creating a notification storm.
 
 For a batch worker, the generated code builds a native command argument array and invokes `cmd.exe` directly:
 
@@ -74,6 +77,7 @@ Do not use `Start-Process -ArgumentList` for forwarded user arguments unless its
 4. Launch it twice. Confirm that only the second launcher PID has the stamped executable's `ExecutablePath` and that the first worker tree stopped.
 5. Run it with arguments containing spaces and shell metacharacters; verify the worker receives them exactly.
 6. Make the worker exit non-zero once; confirm the configured restart delay and `launcher.log` entry. Confirm a zero exit follows the selected policy.
+7. If failure toasts are enabled, confirm the first non-zero exit produces a notification and repeated failures inside the cooldown do not. Also confirm a toast API failure does not change the worker's restart or exit behavior.
 
 When launcher logging is disabled, instead confirm that no `launcher.log` is created and inspect the worker's own log or observable output. The config JSON is a stamping artifact, not a runtime dependency; do not deploy it when a clean bundle is wanted.
 

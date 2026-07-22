@@ -17,6 +17,13 @@ param(
 
     [switch]$DisableLauncherLog,
 
+    [string]$FailureToastTitle = "",
+
+    [string]$FailureToastAppId = "Background process",
+
+    [ValidateRange(1, 86400)]
+    [int]$FailureToastCooldownSeconds = 300,
+
     [ValidateSet("never", "on-failure", "always")]
     [string]$RestartPolicy = "on-failure",
 
@@ -49,6 +56,8 @@ Test-WorkerRelativePath $WorkerRelativePath
 $workerRelativePathJson = $WorkerRelativePath | ConvertTo-Json -Compress
 $workerArgumentsJson = ConvertTo-Json -InputObject ([object[]]$WorkerArguments) -Compress
 $workerArgumentsBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($workerArgumentsJson))
+$failureToastTitleJson = $FailureToastTitle | ConvertTo-Json -Compress
+$failureToastAppIdJson = $FailureToastAppId | ConvertTo-Json -Compress
 if ($WorkerKind -eq "auto") {
     $extension = [System.IO.Path]::GetExtension($WorkerRelativePath)
     $WorkerKind = if ($extension -in @(".bat", ".cmd")) { "batch" } else { "executable" }
@@ -97,6 +106,46 @@ $restartCondition = switch ($RestartPolicy) {
     "always" { '$true' }
 }
 
+$toastSetup = if ([string]::IsNullOrWhiteSpace($FailureToastTitle)) {
+    @'
+function Show-FailureToast {
+    param([int]$ExitCode, [bool]$WillRestart)
+}
+'@
+} else {
+@'
+$FailureToastTitle = ConvertFrom-Json '__FAILURE_TOAST_TITLE_JSON__'
+$FailureToastAppId = ConvertFrom-Json '__FAILURE_TOAST_APP_ID_JSON__'
+$FailureToastCooldownSeconds = __FAILURE_TOAST_COOLDOWN_SECONDS__
+$script:LastFailureToastAtUtc = [DateTime]::MinValue
+
+function Show-FailureToast {
+    param([int]$ExitCode, [bool]$WillRestart)
+    $now = [DateTime]::UtcNow
+    if (($now - $script:LastFailureToastAtUtc).TotalSeconds -lt $FailureToastCooldownSeconds) {
+        return
+    }
+    $script:LastFailureToastAtUtc = $now
+    try {
+        [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+        [Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+        $template = [Windows.UI.Notifications.ToastTemplateType]::ToastText02
+        $toastXml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent($template)
+        $textNodes = $toastXml.GetElementsByTagName('text')
+        $launcherName = [System.IO.Path]::GetFileName($OwnerExePath)
+        $suffix = if ($WillRestart) { ' It will restart in __RESTART_DELAY__ seconds.' } else { '' }
+        $message = "$launcherName stopped with exit code $ExitCode.$suffix"
+        $textNodes.Item(0).AppendChild($toastXml.CreateTextNode($FailureToastTitle)) | Out-Null
+        $textNodes.Item(1).AppendChild($toastXml.CreateTextNode($message)) | Out-Null
+        $toast = [Windows.UI.Notifications.ToastNotification]::new($toastXml)
+        [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($FailureToastAppId).Show($toast)
+    } catch {
+        # Notifications are diagnostic only and must never alter supervision.
+    }
+}
+'@
+}
+
 $inline = @'
 $ErrorActionPreference = 'Stop'
 $OwnerExePath = ConvertFrom-Json '"__OWNER_PATH__"'
@@ -106,6 +155,7 @@ $DefaultArgs = @(ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::Fr
 $ForwardedArgs = ConvertFrom-Json '__FORWARDED_ARGS__'
 $WorkerArgs = @($DefaultArgs) + @($ForwardedArgs)
 __LOG_SETUP__
+__TOAST_SETUP__
 
 function Get-CanonicalPath {
     param([string]$Path)
@@ -155,7 +205,11 @@ __WORKER_INVOCATION__
     }
 
     __LOG_EXITED__
-    if (!(__RESTART_CONDITION__)) {
+    $willRestart = (__RESTART_CONDITION__)
+    if ($exitCode -ne 0) {
+        Show-FailureToast -ExitCode $exitCode -WillRestart $willRestart
+    }
+    if (!$willRestart) {
         exit $exitCode
     }
 
@@ -169,6 +223,10 @@ $inline = $inline.Replace("__WORKER_RELATIVE_PATH_JSON__", $workerRelativePathJs
 $inline = $inline.Replace("__DEFAULT_ARGS_BASE64__", $workerArgumentsBase64)
 $inline = $inline.Replace("__FORWARDED_ARGS__", "@{args_as_json}")
 $inline = $inline.Replace("__LOG_SETUP__", $logSetup.TrimEnd())
+$inline = $inline.Replace("__TOAST_SETUP__", $toastSetup.TrimEnd())
+$inline = $inline.Replace("__FAILURE_TOAST_TITLE_JSON__", $failureToastTitleJson)
+$inline = $inline.Replace("__FAILURE_TOAST_APP_ID_JSON__", $failureToastAppIdJson)
+$inline = $inline.Replace("__FAILURE_TOAST_COOLDOWN_SECONDS__", $FailureToastCooldownSeconds.ToString([System.Globalization.CultureInfo]::InvariantCulture))
 $inline = $inline.Replace("__LOG_EVICTION__", $logEviction)
 $inline = $inline.Replace("__LOG_STARTING__", $logStarting)
 $inline = $inline.Replace("__LOG_FAILURE__", $logFailure)
